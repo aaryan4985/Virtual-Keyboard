@@ -1,106 +1,108 @@
-# keyboard.py
+# virtual_keyboard.py
 
 import cv2
-import mediapipe as mp
 import numpy as np
-import math
-import time
+import mediapipe as mp
+from math import hypot
 
-# Initialize webcam
-cap = cv2.VideoCapture(0)
-cap.set(3, 1280)  # Width
-cap.set(4, 720)   # Height
-
-# Initialize MediaPipe
+# Mediapipe initialization
 mpHands = mp.solutions.hands
-hands = mpHands.Hands(max_num_hands=1, min_detection_confidence=0.8)
+hands = mpHands.Hands(max_num_hands=1, min_detection_confidence=0.7)
 mpDraw = mp.solutions.drawing_utils
 
-# Keyboard layout
-key_width, key_height = 100, 100
+# Webcam
+cap = cv2.VideoCapture(0)
+
+# Keyboard Layout
 keys = [
     ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
     ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
     ["Z", "X", "C", "V", "B", "N", "M"],
-    ["Space"]
+    ["Space", "←", "⏎"]
 ]
 
-# Text input buffer
+# Store typed text
 typed_text = ""
-last_pressed_time = 0
+hovered_key = ""
+key_to_add = ""
 
-def draw_keyboard(img, hovered_key=None):
-    y_offset = 100
-    for row in keys:
-        x_offset = 100
-        for key in row:
-            x1, y1 = x_offset, y_offset
-            x2, y2 = x_offset + key_width, y_offset + key_height
-            if hovered_key == key:
-                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), -1)  # Red for hover
-            else:
-                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+# Function to draw keys
+def draw_keyboard(img):
+    global hovered_key
+    hovered_key = ""
+    key_positions = []
+    start_y = 100
+    for i, row in enumerate(keys):
+        start_x = 100 + (50 * i)  # shift rows
+        for j, key in enumerate(row):
+            x = start_x + j * 60
+            y = start_y + i * 70
+            w, h = 55, 55
+            key_positions.append((key, (x, y)))
 
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            label = " " if key == "Space" else key
-            cv2.putText(img, label, (x_offset + 25, y_offset + 65), font, 1, (255, 255, 255), 2)
+            # Draw key box
+            color = (255, 0, 255) if hovered_key == key else (255, 255, 255)
+            cv2.rectangle(img, (x, y), (x + w, y + h), color, -1)
+            cv2.putText(img, key, (x + 10, y + 40), cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 0), 2)
+    return key_positions
 
-            x_offset += key_width + 10
-        y_offset += key_height + 10
-
-def is_hovering(finger_tip, key_pos):
-    fx, fy = finger_tip
-    x1, y1, x2, y2 = key_pos
-    return x1 < fx < x2 and y1 < fy < y2
-
+# Function to calculate distance between two points
 def distance(p1, p2):
-    return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
+    return hypot(p2[0] - p1[0], p2[1] - p1[1])
 
+# Main loop
 while True:
     success, img = cap.read()
     img = cv2.flip(img, 1)
     imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    result = hands.process(imgRGB)
 
-    results = hands.process(imgRGB)
-    hovered_key = None
-    finger_tip_pos = None
+    key_positions = draw_keyboard(img)
 
-    if results.multi_hand_landmarks:
-        for handLms in results.multi_hand_landmarks:
-            lmList = handLms.landmark
-            index_tip = lmList[8]
-            thumb_tip = lmList[4]
-
-            finger_tip_pos = (int(index_tip.x * img.shape[1]), int(index_tip.y * img.shape[0]))
-            thumb_tip_pos = (int(thumb_tip.x * img.shape[1]), int(thumb_tip.y * img.shape[0]))
-
-            y_offset = 100
-            for row in keys:
-                x_offset = 100
-                for key in row:
-                    x1, y1 = x_offset, y_offset
-                    x2, y2 = x_offset + key_width, y_offset + key_height
-
-                    if is_hovering(finger_tip_pos, (x1, y1, x2, y2)):
-                        hovered_key = key
-                    x_offset += key_width + 10
-                y_offset += key_height + 10
+    if result.multi_hand_landmarks:
+        for handLms in result.multi_hand_landmarks:
+            lmList = []
+            for id, lm in enumerate(handLms.landmark):
+                h, w, _ = img.shape
+                lmList.append((int(lm.x * w), int(lm.y * h)))
 
             mpDraw.draw_landmarks(img, handLms, mpHands.HAND_CONNECTIONS)
 
-            # Tap gesture detection
-            if hovered_key and distance(finger_tip_pos, thumb_tip_pos) < 40:
-                current_time = time.time()
-                if current_time - last_pressed_time > 0.5:  # Debounce for 0.5s
-                    key_to_add = " " if hovered_key == "Space" else hovered_key
-                    typed_text += key_to_add
-                    print("Pressed:", key_to_add)
-                    last_pressed_time = current_time
+            if lmList:
+                # Index fingertip and thumb tip
+                finger_tip_pos = lmList[8]
+                thumb_tip_pos = lmList[4]
 
-    # Draw keyboard and typed text
-    draw_keyboard(img, hovered_key)
-    cv2.rectangle(img, (100, 20), (1100, 80), (0, 0, 0), -1)
-    cv2.putText(img, typed_text, (110, 65), cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 3)
+                # Show fingertip as cursor
+                cv2.circle(img, finger_tip_pos, 10, (0, 255, 0), cv2.FILLED)
+
+                # Detect key hover
+                for key, pos in key_positions:
+                    x, y = pos
+                    if x < finger_tip_pos[0] < x + 55 and y < finger_tip_pos[1] < y + 55:
+                        hovered_key = key
+                        cv2.rectangle(img, (x, y), (x + 55, y + 55), (0, 255, 0), 3)
+
+                        # Pinch Detection for Click
+                        if distance(finger_tip_pos, thumb_tip_pos) < 40:
+                            if hovered_key == "Space":
+                                key_to_add = " "
+                            elif hovered_key == "←":
+                                typed_text = typed_text[:-1]
+                                key_to_add = ""
+                            elif hovered_key == "⏎":
+                                print("Final Text:", typed_text)
+                                typed_text = ""
+                                key_to_add = ""
+                            else:
+                                key_to_add = hovered_key
+                            typed_text += key_to_add
+                            print("Pressed:", hovered_key)
+                            cv2.waitKey(200)  # delay to avoid multiple keypresses
+
+    # Display typed text
+    cv2.rectangle(img, (100, 30), (1000, 80), (0, 0, 0), -1)
+    cv2.putText(img, typed_text, (110, 65), cv2.FONT_HERSHEY_SIMPLEX, 1.8, (255, 255, 255), 3)
 
     cv2.imshow("Virtual Keyboard", img)
     if cv2.waitKey(1) & 0xFF == ord('q'):
